@@ -10,7 +10,7 @@ struct RequestHeader {
     correlation_id: i32,
 }
 
-fn handle_request(mut stream: TcpStream) {
+fn handle_request(mut stream: &TcpStream) {
     let header = parse_header(&stream);
     let response = create_response(header);
     stream.write(&response).unwrap();
@@ -68,8 +68,10 @@ fn main() {
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                println!("accepted new connection");
-                handle_request(stream);
+                while stream.peek(&mut [0; 1]).is_ok() {
+                    println!("accepted new connection");
+                    handle_request(&stream);
+                }
             }
             Err(e) => {
                 println!("error: {}", e);
