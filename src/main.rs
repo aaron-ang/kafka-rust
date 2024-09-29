@@ -1,7 +1,9 @@
+use anyhow::Result;
 use bytes::{Buf, BufMut};
 use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
+    thread,
 };
 
 struct RequestHeader {
@@ -10,15 +12,17 @@ struct RequestHeader {
     correlation_id: i32,
 }
 
-fn handle_request(mut stream: &TcpStream) {
-    let header = parse_header(&stream);
-    let response = create_response(header);
-    stream.write(&response).unwrap();
+fn handle_conn(mut stream: TcpStream) -> Result<()> {
+    loop {
+        let header = parse_header(&stream)?;
+        let response = create_response(header);
+        stream.write(&response)?;
+    }
 }
 
-fn parse_header(mut stream: &TcpStream) -> RequestHeader {
+fn parse_header(mut stream: &TcpStream) -> Result<RequestHeader> {
     let mut buf = [0; 4];
-    stream.read_exact(&mut buf).unwrap();
+    stream.read_exact(&mut buf)?;
     let len = u32::from_be_bytes(buf) as usize;
 
     let mut msg = vec![0; len];
@@ -29,21 +33,22 @@ fn parse_header(mut stream: &TcpStream) -> RequestHeader {
     let api_version = msg.get_i16();
     let correlation_id = msg.get_i32();
 
-    RequestHeader {
+    Ok(RequestHeader {
         api_key,
         api_version,
         correlation_id,
-    }
+    })
 }
 
 fn create_response(header: RequestHeader) -> Vec<u8> {
     let mut data = Vec::new();
     data.put_i32(header.correlation_id);
     if header.api_key == 18 {
-        let mut error_code: i16 = 0;
-        if !(0..=4).contains(&header.api_version) {
-            error_code = 35;
-        }
+        let error_code = if header.api_version < 0 || header.api_version > 4 {
+            35
+        } else {
+            0
+        };
         data.put_i16(error_code); // error_code
         data.put_i8(2); // api_keys
         data.put_i16(header.api_key);
@@ -68,10 +73,12 @@ fn main() {
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                while stream.peek(&mut [0; 1]).is_ok() {
-                    println!("accepted new connection");
-                    handle_request(&stream);
-                }
+                println!("accepted new connection");
+                thread::spawn(move || {
+                    if let Err(e) = handle_conn(stream) {
+                        println!("error handling request: {}", e);
+                    }
+                });
             }
             Err(e) => {
                 println!("error: {}", e);
