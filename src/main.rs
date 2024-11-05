@@ -1,88 +1,71 @@
-use anyhow::Result;
-use bytes::{Buf, BufMut};
-use std::{
-    io::{Read, Write},
+mod api_versions;
+mod protocol;
+
+use api_versions::ApiVersionsResponseV3;
+use protocol::*;
+
+use anyhow::{anyhow, Result};
+use bytes::Bytes;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    thread,
 };
 
-struct RequestHeader {
-    api_key: i16,
-    api_version: i16,
-    correlation_id: i32,
-}
-
-fn handle_conn(mut stream: TcpStream) -> Result<()> {
-    loop {
-        let header = parse_header(&stream)?;
-        let response = create_response(header);
-        stream.write(&response)?;
-    }
-}
-
-fn parse_header(mut stream: &TcpStream) -> Result<RequestHeader> {
-    let mut buf = [0; 4];
-    stream.read_exact(&mut buf)?;
-    let len = u32::from_be_bytes(buf) as usize;
-
-    let mut msg = vec![0; len];
-    stream.read_exact(&mut msg).unwrap();
-
-    let mut msg = msg.as_slice();
-    let api_key = msg.get_i16();
-    let api_version = msg.get_i16();
-    let correlation_id = msg.get_i32();
-
-    Ok(RequestHeader {
-        api_key,
-        api_version,
-        correlation_id,
-    })
-}
-
-fn create_response(header: RequestHeader) -> Vec<u8> {
-    let mut data = Vec::new();
-    data.put_i32(header.correlation_id);
-    if header.api_key == 18 {
-        let error_code = if header.api_version < 0 || header.api_version > 4 {
-            35
-        } else {
-            0
-        };
-        data.put_i16(error_code); // error_code
-        data.put_i8(2); // api_keys
-        data.put_i16(header.api_key);
-        data.put_i16(0); // min_version
-        data.put_i16(4); // max_version
-        data.put_i8(0); // _tagged_fields
-        data.put_i32(0); // throttle_time_ms
-        data.put_i8(0); // _tagged_fields
-    }
-
-    let mut response = Vec::new();
-    response.put_i32(data.len().try_into().unwrap());
-    response.put(data.as_slice());
-    response
-}
-
-fn main() {
+#[tokio::main]
+async fn main() -> Result<()> {
     println!("Logs from your program will appear here!");
 
-    let listener = TcpListener::bind("127.0.0.1:9092").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:9092").await?;
 
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
-                println!("accepted new connection");
-                thread::spawn(move || {
-                    if let Err(e) = handle_conn(stream) {
-                        println!("error handling request: {}", e);
-                    }
-                });
+    loop {
+        let (stream, _) = listener.accept().await?;
+
+        tokio::spawn(async move {
+            println!("accepted new connection");
+            if let Err(e) = handle_conn(stream).await {
+                eprintln!("error handling request: {:?}", e);
             }
-            Err(e) => {
-                println!("error: {}", e);
-            }
-        }
+        });
     }
+}
+
+async fn handle_conn(mut stream: TcpStream) -> Result<()> {
+    loop {
+        let mut message = get_msg(&mut stream).await?;
+        let resp = process_request(&mut message)?;
+        let resp_msg = ResponseMessage::new(resp.as_bytes());
+        stream.write(resp_msg.as_bytes()).await?;
+    }
+}
+
+async fn get_msg(stream: &mut TcpStream) -> Result<Bytes> {
+    let mut len_buf = [0; 4];
+    stream.read_exact(&mut len_buf).await?;
+
+    let msg_len = i32::from_be_bytes(len_buf) as usize;
+    let mut msg_buf = vec![0; msg_len];
+    stream.read_exact(&mut msg_buf).await?;
+
+    Ok(Bytes::from(msg_buf))
+}
+
+fn process_request(message: &mut Bytes) -> Result<Box<dyn Response + Send>> {
+    let header = HeaderV2::deserialize(message)?;
+    let request_api_key = match ApiKey::try_from(header.api_key) {
+        Ok(key) => key,
+        Err(_) => {
+            return Err(anyhow!("Invalid request api key"));
+        }
+    };
+
+    let response = match request_api_key {
+        ApiKey::Fetch => todo!(),
+        ApiKey::ApiVersions => {
+            let resp = ApiVersionsResponseV3::new(header);
+            Box::new(resp)
+        }
+        ApiKey::DescribeTopicPartitions => todo!(),
+    };
+
+    Ok(response)
 }
