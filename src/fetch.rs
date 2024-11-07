@@ -10,9 +10,9 @@ pub struct FetchRequestV16 {
     min_bytes: u32,
     max_bytes: u32,
     isolation_level: u8,
-    pub session_id: u32,
+    session_id: u32,
     session_epoch: u32,
-    pub topics: Vec<TopicRequest>,
+    topics: Vec<TopicRequest>,
     forgotten_topics_data: Vec<ForgottenTopicData>,
     rack_id: CompactNullableString,
 }
@@ -105,25 +105,50 @@ impl Response for FetchResponseV16 {
 
 pub fn handle_request(header: HeaderV2, message: &mut Bytes) -> Result<FetchResponseV16> {
     let req: FetchRequestV16 = FetchRequestV16::deserialize(message)?;
-    if req.topics.is_empty() {
-        let responses = vec![];
-        return Ok(FetchResponseV16::new(
-            header.correlation_id,
-            req.session_id,
-            responses,
-        ));
-    };
-    todo!()
+    let mut responses = vec![];
+
+    for topic_req in req.topics {
+        let mut partitions = vec![];
+        for partition in topic_req.partitions {
+            let tp = TopicPartition {
+                partition_index: partition.partition_index,
+                error_code: ErrorCode::UnknownTopicId,
+                high_watermark: 0,
+                last_stable_offset: 0,
+                log_start_offset: 0,
+                aborted_transactions: CompactArray(vec![]),
+                preferred_read_replica: -1,
+                record_batches: CompactArray(vec![]),
+            };
+            partitions.push(tp);
+        }
+        responses.push(TopicResponse::new(topic_req.topic_id.0, partitions));
+    }
+
+    Ok(FetchResponseV16::new(
+        header.correlation_id,
+        req.session_id,
+        responses,
+    ))
 }
 
 pub struct TopicRequest {
-    pub topic_id: Uuid,
-    pub partitions: Vec<Partition>,
+    topic_id: Uuid,
+    partitions: Vec<Partition>,
 }
 
 impl Deserialize<Partition> for TopicRequest {
     fn deserialize(src: &mut Bytes) -> Result<Partition> {
-        Ok(Partition {})
+        let p = Partition {
+            partition_index: src.get_u32(),
+            current_leader_epoch: src.get_u32(),
+            fetch_offset: src.get_u64(),
+            last_fetched_epoch: src.get_u32(),
+            log_start_offset: src.get_u64(),
+            partition_max_bytes: src.get_u32(),
+        };
+        _ = TagBuffer::deserialize(src);
+        Ok(p)
     }
 }
 
@@ -163,14 +188,14 @@ impl Deserialize<u32> for ForgottenTopicData {
 }
 
 pub struct TopicPartition {
-    pub partition_index: u32,
-    pub error_code: ErrorCode,
-    pub high_watermark: i64,
-    pub last_stable_offset: i64,
-    pub log_start_offset: i64,
-    pub aborted_transactions: CompactArray<AbortedTransaction>,
-    pub preferred_read_replica: i32,
-    pub record_batches: CompactArray<BatchBytes>,
+    partition_index: u32,
+    error_code: ErrorCode,
+    high_watermark: i64,
+    last_stable_offset: i64,
+    log_start_offset: i64,
+    aborted_transactions: CompactArray<AbortedTransaction>,
+    preferred_read_replica: i32,
+    record_batches: CompactArray<BatchBytes>,
 }
 
 impl Serialize for TopicPartition {
@@ -201,7 +226,7 @@ impl Serialize for AbortedTransaction {
 }
 
 pub struct BatchBytes {
-    pub bytes: Bytes,
+    bytes: Bytes,
 }
 
 impl Serialize for BatchBytes {
@@ -210,4 +235,11 @@ impl Serialize for BatchBytes {
     }
 }
 
-pub struct Partition {}
+pub struct Partition {
+    partition_index: u32,
+    current_leader_epoch: u32,
+    fetch_offset: u64,
+    last_fetched_epoch: u32,
+    log_start_offset: u64,
+    partition_max_bytes: u32,
+}

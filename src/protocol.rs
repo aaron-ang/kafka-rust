@@ -29,6 +29,7 @@ pub enum ErrorCode {
     None = 0,
     UnknownTopicOrPartition = 3,
     UnsupportedVersion = 35,
+    UnknownTopicId = 100,
 }
 
 pub struct HeaderV0 {
