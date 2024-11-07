@@ -1,11 +1,12 @@
 mod api_versions;
+mod describe_topic_partitions;
 mod protocol;
 
 use api_versions::ApiVersionsResponseV3;
 use protocol::*;
 
 use anyhow::{anyhow, Result};
-use bytes::Bytes;
+use bytes::{BufMut, Bytes, BytesMut};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -19,7 +20,6 @@ async fn main() -> Result<()> {
 
     loop {
         let (stream, _) = listener.accept().await?;
-
         tokio::spawn(async move {
             println!("accepted new connection");
             if let Err(e) = handle_conn(stream).await {
@@ -31,14 +31,15 @@ async fn main() -> Result<()> {
 
 async fn handle_conn(mut stream: TcpStream) -> Result<()> {
     loop {
-        let mut message = get_msg(&mut stream).await?;
-        let resp = process_request(&mut message)?;
-        let resp_msg = ResponseMessage::new(resp.as_bytes());
-        stream.write(resp_msg.as_bytes()).await?;
+        let mut message = get_message(&mut stream).await?;
+        let resp = process_message(&mut message)?;
+        let resp_msg = create_response_message(resp.as_bytes());
+        println!("response: {:?}", resp_msg.to_vec());
+        stream.write(&resp_msg).await?;
     }
 }
 
-async fn get_msg(stream: &mut TcpStream) -> Result<Bytes> {
+async fn get_message(stream: &mut TcpStream) -> Result<Bytes> {
     let mut len_buf = [0; 4];
     stream.read_exact(&mut len_buf).await?;
 
@@ -49,23 +50,33 @@ async fn get_msg(stream: &mut TcpStream) -> Result<Bytes> {
     Ok(Bytes::from(msg_buf))
 }
 
-fn process_request(message: &mut Bytes) -> Result<Box<dyn Response + Send>> {
+fn process_message(message: &mut Bytes) -> Result<Box<dyn Response + Send>> {
     let header = HeaderV2::deserialize(message)?;
     let request_api_key = match ApiKey::try_from(header.api_key) {
         Ok(key) => key,
         Err(_) => {
-            return Err(anyhow!("Invalid request api key"));
+            return Err(anyhow!("Invalid request api key, {:?}", header.api_key));
         }
     };
-
-    let response = match request_api_key {
+    println!("request: {:?}", message.to_vec());
+    let response: Box<dyn Response + Send> = match request_api_key {
         ApiKey::Fetch => todo!(),
         ApiKey::ApiVersions => {
             let resp = ApiVersionsResponseV3::new(header);
             Box::new(resp)
         }
-        ApiKey::DescribeTopicPartitions => todo!(),
+        ApiKey::DescribeTopicPartitions => {
+            let res = describe_topic_partitions::handle_request(header, message)?;
+            Box::new(res)
+        }
     };
-
     Ok(response)
+}
+
+fn create_response_message(src: Bytes) -> Bytes {
+    let mut bytes = BytesMut::with_capacity(src.len() + 4);
+    let msg_size = src.len() as i32;
+    bytes.put_i32(msg_size);
+    bytes.put_slice(&src);
+    bytes.freeze()
 }

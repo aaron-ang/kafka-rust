@@ -23,9 +23,8 @@ const API_KEYS: [ApiVersionsApiKey; 3] = [
 pub struct ApiVersionsResponseV3 {
     header: HeaderV0,
     error_code: ErrorCode,
-    api_keys: Vec<ApiVersionsApiKey>,
+    api_keys: CompactArray<ApiVersionsApiKey>,
     throttle_time_ms: i32,
-    bytes: BytesMut,
 }
 
 impl ApiVersionsResponseV3 {
@@ -37,31 +36,24 @@ impl ApiVersionsResponseV3 {
             error_code = ErrorCode::UnsupportedVersion
         }
 
-        let mut resp = Self {
+        let resp = Self {
             header,
             error_code,
-            api_keys: API_KEYS.to_vec(),
+            api_keys: CompactArray(API_KEYS.to_vec()),
             throttle_time_ms: 0,
-            bytes: BytesMut::new(),
         };
-
-        resp.serialize();
         resp
-    }
-
-    fn serialize(&mut self) {
-        let mut bytes = BytesMut::from(self.header.serialize());
-        bytes.put(self.error_code.serialize());
-        bytes.put(CompactArray::serialize(&mut self.api_keys));
-        bytes.put_i32(self.throttle_time_ms);
-        bytes.put(TaggedFields::serialize()); // tag buffer
-        self.bytes = bytes;
     }
 }
 
 impl Response for ApiVersionsResponseV3 {
-    fn as_bytes(&self) -> &[u8] {
-        &self.bytes
+    fn as_bytes(&self) -> Bytes {
+        let mut bytes = BytesMut::from(self.header.serialize());
+        bytes.put(self.error_code.serialize());
+        bytes.put(self.api_keys.serialize());
+        bytes.put_i32(self.throttle_time_ms);
+        bytes.put(TagBuffer::serialize());
+        bytes.freeze()
     }
 }
 
@@ -73,12 +65,12 @@ struct ApiVersionsApiKey {
 }
 
 impl Serialize for ApiVersionsApiKey {
-    fn serialize(&mut self) -> Bytes {
+    fn serialize(&self) -> Bytes {
         let mut b = BytesMut::new();
         b.put_i16(self.key.into());
         b.put_i16(self.min_version);
         b.put_i16(self.max_version);
-        b.put(TaggedFields::serialize()); // tag buffer
+        b.put(TagBuffer::serialize());
         b.freeze()
     }
 }
