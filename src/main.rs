@@ -1,5 +1,6 @@
 mod api_versions;
 mod describe_topic_partitions;
+mod fetch;
 mod protocol;
 
 use api_versions::ApiVersionsResponseV3;
@@ -60,7 +61,10 @@ fn process_message(message: &mut Bytes) -> Result<Box<dyn Response + Send>> {
     };
     println!("request: {:?}", message.to_vec());
     let response: Box<dyn Response + Send> = match request_api_key {
-        ApiKey::Fetch => todo!(),
+        ApiKey::Fetch => {
+            let res = fetch::handle_request(header, message)?;
+            Box::new(res)
+        }
         ApiKey::ApiVersions => {
             let resp = ApiVersionsResponseV3::new(header);
             Box::new(resp)
