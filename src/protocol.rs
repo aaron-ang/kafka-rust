@@ -31,15 +31,6 @@ pub enum ErrorCode {
     UnsupportedVersion = 35,
 }
 
-impl Serialize for ErrorCode {
-    fn serialize(&self) -> Bytes {
-        let mut b = BytesMut::with_capacity(2);
-        let val = (*self).into();
-        b.put_i16(val);
-        b.freeze()
-    }
-}
-
 pub struct HeaderV0 {
     correlation_id: i32,
 }
@@ -81,7 +72,7 @@ pub struct HeaderV2 {
     pub api_key: i16,
     pub api_version: i16,
     pub correlation_id: i32,
-    pub client_id: String,
+    pub client_id: NullableString,
 }
 
 impl Deserialize<Self> for HeaderV2 {
@@ -101,62 +92,78 @@ impl Deserialize<Self> for HeaderV2 {
     }
 }
 
-pub struct Uuid;
+#[derive(Clone)]
+pub struct Uuid(pub String);
 
 impl Uuid {
-    pub fn serialize(s: &str) -> Bytes {
+    pub fn serialize(self) -> Bytes {
         let mut b = BytesMut::with_capacity(32);
-        b.extend_from_slice(&hex::decode(s.replace('-', "")).expect("valid UUID string"));
+        b.extend_from_slice(&hex::decode(self.0.replace('-', "")).expect("valid UUID string"));
         b.freeze()
     }
 }
 
-impl Deserialize<String> for Uuid {
-    fn deserialize(src: &mut Bytes) -> Result<String> {
+impl Deserialize<Self> for Uuid {
+    fn deserialize(src: &mut Bytes) -> Result<Self> {
         let mut s = hex::encode(src.slice(..16));
         src.advance(16);
         s.insert(8, '-');
         s.insert(13, '-');
         s.insert(18, '-');
         s.insert(23, '-');
-        Ok(s)
+        Ok(Self(s))
     }
 }
 
-pub struct CompactString;
+pub struct NullableString(pub Option<String>);
 
-impl CompactString {
-    pub fn serialize(s: &str) -> Bytes {
-        let mut b = BytesMut::new();
-        let len = s.len() as u8 + 1;
-        b.put_u8(len);
-        b.put(s.as_bytes());
-        b.freeze()
-    }
-}
-
-impl Deserialize<String> for CompactString {
-    fn deserialize(src: &mut Bytes) -> Result<String> {
-        let (len, read) = u32::decode_var(src).ok_or_else(|| anyhow!("Failed to decode length"))?;
-        src.advance(read);
-        let string_len = if len > 1 { len as usize - 1 } else { 0 };
-        let bytes = src.slice(..string_len);
-        src.advance(string_len);
-        Ok(String::from_utf8(bytes.to_vec())?)
-    }
-}
-
-pub struct NullableString;
-
-impl Deserialize<String> for NullableString {
-    fn deserialize(src: &mut Bytes) -> Result<String> {
+impl Deserialize<Self> for NullableString {
+    fn deserialize(src: &mut Bytes) -> Result<Self> {
         let len = src.get_i16();
         let string_len = if len == -1 { 0 } else { len as usize };
+        if string_len == 0 {
+            return Ok(Self(None));
+        }
         if src.remaining() < string_len {
             return Err(anyhow!("Not enough bytes to read string"));
         }
         let bytes = src.split_to(string_len);
-        Ok(String::from_utf8(bytes.to_vec())?)
+        Ok(Self(Some(String::from_utf8(bytes.to_vec())?)))
+    }
+}
+
+#[derive(Clone)]
+pub struct CompactNullableString(pub Option<String>);
+
+impl CompactNullableString {
+    pub fn serialize(self) -> Bytes {
+        let mut b = BytesMut::new();
+        let mut len = 1;
+        match self.0 {
+            Some(s) => {
+                len += s.len() as u8;
+                b.put_u8(len);
+                b.put(s.as_bytes());
+            }
+            None => b.put_u8(len),
+        }
+        b.freeze()
+    }
+}
+
+impl Deserialize<Self> for CompactNullableString {
+    fn deserialize(src: &mut Bytes) -> Result<Self> {
+        let (len, read) = u32::decode_var(src).ok_or_else(|| anyhow!("Failed to decode length"))?;
+        src.advance(read);
+        let string_len = if len > 1 { len as usize - 1 } else { 0 };
+        if string_len == 0 {
+            return Ok(Self(None));
+        }
+        if src.remaining() < string_len {
+            return Err(anyhow!("Not enough bytes to read string"));
+        }
+        let bytes = src.split_to(string_len);
+        Ok(Self(Some(String::from_utf8(bytes.to_vec())?)))
     }
 }
 

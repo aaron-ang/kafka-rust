@@ -5,41 +5,14 @@ use crate::protocol::*;
 
 const DEFAULT_UNKNOWN_TOPIC_UUID: &str = "00000000-0000-0000-0000-000000000000";
 
-pub fn handle_request(
-    header: HeaderV2,
-    message: &mut Bytes,
-) -> Result<DescribeTopicPartitionsResponseV0> {
-    let req = DescribeTopicPartitionsRequestV0::deserialize(message)?;
-    let topic_id = DEFAULT_UNKNOWN_TOPIC_UUID.to_string();
-    let topic_error_code = ErrorCode::UnknownTopicOrPartition;
-    let mut topics = vec![];
-
-    for topic_name in req.topic_names {
-        let topic = Topic {
-            error_code: topic_error_code,
-            name: topic_name,
-            topic_id: topic_id.clone(),
-            is_internal: false,
-            partitions: CompactArray(vec![]),
-            topic_authorized_operations: 0,
-        };
-        topics.push(topic);
-    }
-
-    Ok(DescribeTopicPartitionsResponseV0::new(
-        header.correlation_id,
-        topics,
-    ))
-}
-
 pub struct DescribeTopicPartitionsRequestV0 {
-    pub topic_names: Vec<String>,
+    pub topic_names: Vec<CompactNullableString>,
     response_partition_limit: i32,
     cursor: u8,
 }
 
-impl DescribeTopicPartitionsRequestV0 {
-    pub fn deserialize(src: &mut Bytes) -> Result<Self> {
+impl Deserialize<Self> for DescribeTopicPartitionsRequestV0 {
+    fn deserialize(src: &mut Bytes) -> Result<Self> {
         let topic_names = CompactArray::<Topic>::deserialize(src)?;
         let response_partition_limit = src.get_i32();
         let cursor = src.get_u8();
@@ -84,10 +57,37 @@ impl Response for DescribeTopicPartitionsResponseV0 {
     }
 }
 
+pub fn handle_request(
+    header: HeaderV2,
+    message: &mut Bytes,
+) -> Result<DescribeTopicPartitionsResponseV0> {
+    let req = DescribeTopicPartitionsRequestV0::deserialize(message)?;
+    let topic_id = DEFAULT_UNKNOWN_TOPIC_UUID;
+    let topic_error_code = ErrorCode::UnknownTopicOrPartition;
+    let mut topics = vec![];
+
+    for topic_name in req.topic_names {
+        let topic = Topic {
+            error_code: topic_error_code,
+            name: topic_name,
+            topic_id: Uuid(topic_id.to_string()),
+            is_internal: false,
+            partitions: CompactArray(vec![]),
+            topic_authorized_operations: 0,
+        };
+        topics.push(topic);
+    }
+
+    Ok(DescribeTopicPartitionsResponseV0::new(
+        header.correlation_id,
+        topics,
+    ))
+}
+
 pub struct Topic {
     pub error_code: ErrorCode,
-    pub name: String,
-    pub topic_id: String,
+    pub name: CompactNullableString,
+    pub topic_id: Uuid,
     pub is_internal: bool,
     pub partitions: CompactArray<Partition>,
     pub topic_authorized_operations: i32,
@@ -96,9 +96,9 @@ pub struct Topic {
 impl Serialize for Topic {
     fn serialize(&self) -> Bytes {
         let mut b = BytesMut::new();
-        b.put(self.error_code.serialize());
-        b.put(CompactString::serialize(&self.name));
-        b.put(Uuid::serialize(&self.topic_id));
+        b.put_i16(self.error_code.into());
+        b.put(self.name.clone().serialize());
+        b.put(self.topic_id.clone().serialize());
         b.put_u8(self.is_internal.into());
         b.put(self.partitions.serialize());
         b.put_i32(self.topic_authorized_operations);
@@ -107,11 +107,11 @@ impl Serialize for Topic {
     }
 }
 
-impl Deserialize<String> for Topic {
-    fn deserialize(src: &mut Bytes) -> Result<String> {
-        let s = CompactString::deserialize(src);
+impl Deserialize<CompactNullableString> for Topic {
+    fn deserialize(src: &mut Bytes) -> Result<CompactNullableString> {
+        let s = CompactNullableString::deserialize(src)?;
         _ = TagBuffer::deserialize(src);
-        s
+        Ok(s)
     }
 }
 

@@ -49,7 +49,7 @@ impl ApiVersionsResponseV3 {
 impl Response for ApiVersionsResponseV3 {
     fn as_bytes(&self) -> Bytes {
         let mut bytes = BytesMut::from(self.header.serialize());
-        bytes.put(self.error_code.serialize());
+        bytes.put_i16(self.error_code.into());
         bytes.put(self.api_keys.serialize());
         bytes.put_i32(self.throttle_time_ms);
         bytes.put(TagBuffer::serialize());
