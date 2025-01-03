@@ -43,29 +43,6 @@ impl Deserialize<Self> for FetchRequestV16 {
     }
 }
 
-impl Deserialize<TopicRequest> for FetchRequestV16 {
-    fn deserialize(src: &mut Bytes) -> TopicRequest {
-        let topic_id = Uuid::deserialize(src);
-        let partitions = CompactArray::<TopicRequest>::deserialize(src);
-        TagBuffer::deserialize(src);
-        TopicRequest {
-            topic_id,
-            partitions,
-        }
-    }
-}
-
-impl Deserialize<ForgottenTopicData> for FetchRequestV16 {
-    fn deserialize(src: &mut Bytes) -> ForgottenTopicData {
-        let ftd = ForgottenTopicData {
-            topic_id: Uuid::deserialize(src),
-            partitions: CompactArray::<ForgottenTopicData>::deserialize(src),
-        };
-        TagBuffer::deserialize(src);
-        ftd
-    }
-}
-
 pub struct FetchResponseV16 {
     header: HeaderV1,
     throttle_time_ms: i32,
@@ -119,16 +96,15 @@ pub fn handle_request(header: HeaderV2, message: &mut Bytes) -> Result<FetchResp
                 ))?
             {
                 error_code = ErrorCode::None;
-                let batch_bytes = BatchBytes { bytes: raw_batch };
-                partition_record_batches.push(batch_bytes);
+                partition_record_batches.push(BatchBytes { bytes: raw_batch });
             }
             let partition = TopicPartition {
-                partition_index: 0,
+                partition_index: partition_id,
                 error_code,
                 high_watermark: 0,
                 last_stable_offset: 0,
                 log_start_offset: 0,
-                aborted_transactions: CompactArray(vec![]),
+                aborted_transactions: CompactArray(Vec::new()),
                 preferred_read_replica: 0,
                 record_batches: CompactArray(partition_record_batches),
             };
@@ -149,18 +125,15 @@ pub struct TopicRequest {
     partitions: Vec<Partition>,
 }
 
-impl Deserialize<Partition> for TopicRequest {
-    fn deserialize(src: &mut Bytes) -> Partition {
-        let partition = Partition {
-            partition_index: src.get_u32(),
-            current_leader_epoch: src.get_u32(),
-            fetch_offset: src.get_u64(),
-            last_fetched_epoch: src.get_u32(),
-            log_start_offset: src.get_u64(),
-            partition_max_bytes: src.get_u32(),
-        };
+impl Deserialize<TopicRequest> for FetchRequestV16 {
+    fn deserialize(src: &mut Bytes) -> TopicRequest {
+        let topic_id = Uuid::deserialize(src);
+        let partitions = CompactArray::<TopicRequest>::deserialize(src);
         TagBuffer::deserialize(src);
-        partition
+        TopicRequest {
+            topic_id,
+            partitions,
+        }
     }
 }
 
@@ -191,6 +164,17 @@ impl Serialize for TopicResponse {
 struct ForgottenTopicData {
     topic_id: Uuid,
     partitions: Vec<u32>, // The partitions indexes to forget.
+}
+
+impl Deserialize<ForgottenTopicData> for FetchRequestV16 {
+    fn deserialize(src: &mut Bytes) -> ForgottenTopicData {
+        let forgotten_topic_data = ForgottenTopicData {
+            topic_id: Uuid::deserialize(src),
+            partitions: CompactArray::<ForgottenTopicData>::deserialize(src),
+        };
+        TagBuffer::deserialize(src);
+        forgotten_topic_data
+    }
 }
 
 impl Deserialize<u32> for ForgottenTopicData {
@@ -254,4 +238,19 @@ pub struct Partition {
     last_fetched_epoch: u32,
     log_start_offset: u64,
     partition_max_bytes: u32,
+}
+
+impl Deserialize<Partition> for TopicRequest {
+    fn deserialize(src: &mut Bytes) -> Partition {
+        let partition = Partition {
+            partition_index: src.get_u32(),
+            current_leader_epoch: src.get_u32(),
+            fetch_offset: src.get_u64(),
+            last_fetched_epoch: src.get_u32(),
+            log_start_offset: src.get_u64(),
+            partition_max_bytes: src.get_u32(),
+        };
+        TagBuffer::deserialize(src);
+        partition
+    }
 }
