@@ -26,11 +26,11 @@ impl RecordBatches {
         &self.batches
     }
 
-    pub fn raw_batch_for_topic(&self, topic_id: Uuid, partition_id: u32) -> Result<Option<Bytes>> {
+    pub fn raw_batch_for_topic(&self, topic_id: &Uuid, partition_id: u32) -> Result<Option<Bytes>> {
         let topic_name = self.batches.iter().find_map(|b| {
             b.records.iter().find_map(|r| {
                 if let RecordValue::Topic(topic) = &r.value {
-                    if topic.topic_id == topic_id {
+                    if topic.topic_id == *topic_id {
                         return Some(topic.topic_name.clone().0.unwrap_or_default());
                     }
                 }

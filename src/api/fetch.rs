@@ -1,6 +1,7 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
+use crate::cluster_metadata::RecordBatches;
 use crate::protocol::*;
 
 pub struct FetchRequestV16 {
@@ -75,17 +76,13 @@ pub struct FetchResponseV16 {
 
 impl FetchResponseV16 {
     pub fn new(correlation_id: i32, session_id: u32, responses: Vec<TopicResponse>) -> Self {
-        let header = HeaderV1::new(correlation_id);
-
-        let resp = Self {
-            header,
+        Self {
+            header: HeaderV1::new(correlation_id),
             throttle_time_ms: 0,
             error_code: ErrorCode::None,
             session_id,
             responses: CompactArray(responses),
-        };
-
-        resp
+        }
     }
 }
 
@@ -103,22 +100,39 @@ impl Response for FetchResponseV16 {
 
 pub fn handle_request(header: HeaderV2, message: &mut Bytes) -> Result<FetchResponseV16> {
     let req: FetchRequestV16 = FetchRequestV16::deserialize(message);
+    let record_batches = RecordBatches::from_file(CLUSTER_METADATA_LOG_FILE)?;
     let mut responses = vec![];
 
     for topic_req in req.topics {
+        let topic_id = topic_req.topic_id.clone();
+        let mut error_code = ErrorCode::UnknownTopicId;
         let mut partitions = vec![];
+
         for partition in topic_req.partitions {
-            let tp = TopicPartition {
-                partition_index: partition.partition_index,
-                error_code: ErrorCode::UnknownTopicId,
+            let partition_id = partition.partition_index;
+            let mut partition_record_batches = Vec::new();
+            if let Some(raw_batch) = record_batches
+                .raw_batch_for_topic(&topic_id, partition_id)
+                .context(format!(
+                    "read messages for topic '{}' in partition '{}'",
+                    topic_id, partition_id
+                ))?
+            {
+                error_code = ErrorCode::None;
+                let batch_bytes = BatchBytes { bytes: raw_batch };
+                partition_record_batches.push(batch_bytes);
+            }
+            let partition = TopicPartition {
+                partition_index: 0,
+                error_code,
                 high_watermark: 0,
                 last_stable_offset: 0,
                 log_start_offset: 0,
                 aborted_transactions: CompactArray(vec![]),
                 preferred_read_replica: 0,
-                record_batches: CompactArray(vec![]),
+                record_batches: CompactArray(partition_record_batches),
             };
-            partitions.push(tp);
+            partitions.push(partition);
         }
         responses.push(TopicResponse::new(topic_req.topic_id.0, partitions));
     }
