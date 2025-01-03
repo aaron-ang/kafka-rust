@@ -15,10 +15,9 @@ impl RecordBatches {
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
         let file_bytes = std::fs::read(path)?;
         let mut data = Bytes::from(file_bytes);
-        let mut batches = vec![];
+        let mut batches = Vec::new();
         while data.has_remaining() {
-            let record_batch = RecordBatch::from_bytes(&mut data)?;
-            batches.push(record_batch);
+            batches.push(RecordBatch::from_bytes(&mut data)?);
         }
         Ok(Self { batches })
     }
@@ -28,25 +27,23 @@ impl RecordBatches {
     }
 
     pub fn raw_batch_for_topic(&self, topic_id: Uuid, partition_id: u32) -> Result<Option<Bytes>> {
-        let mut topic_name = String::new();
-
-        self.batches.iter().find(|&b| {
-            b.records.iter().any(|r| match &r.value {
-                RecordValue::Topic(topic) if topic.topic_id == topic_id => {
-                    topic_name = topic.topic_name.clone().0.unwrap_or_default();
-                    true
+        let topic_name = self.batches.iter().find_map(|b| {
+            b.records.iter().find_map(|r| {
+                if let RecordValue::Topic(topic) = &r.value {
+                    if topic.topic_id == topic_id {
+                        return Some(topic.topic_name.clone().0.unwrap_or_default());
+                    }
                 }
-                _ => false,
+                None
             })
         });
-
-        if topic_name.is_empty() {
+        if topic_name.as_deref().unwrap_or("").is_empty() {
             return Ok(None);
         }
-
         let file = format!(
             "/tmp/kraft-combined-logs/{}-{}/00000000000000000000.log",
-            topic_name, partition_id
+            topic_name.unwrap(),
+            partition_id
         );
         let file_bytes = std::fs::read(file)?;
         Ok(Some(Bytes::from(file_bytes)))
@@ -84,8 +81,8 @@ impl RecordBatch {
         let producer_id = src.get_i64();
         let producer_epoch = src.get_i16();
         let base_sequence = src.get_i32();
-        let records = NullableBytes::<RecordBatch>::deserialize(src);
 
+        let records = NullableBytes::<RecordBatch>::deserialize(src);
         Ok(Self {
             base_offset,
             batch_length,
@@ -143,35 +140,23 @@ pub struct Record {
 
 impl Record {
     pub fn from_bytes(src: &mut Bytes) -> Self {
-        let (length, read) = i64::decode_var(src).expect("Failed to decode length");
-        src.advance(read);
-
+        let length = decode_var_i64(src);
         let attributes = src.get_i8();
+        let timestamp_delta = decode_var_i64(src);
+        let offset_delta = decode_var_i64(src);
 
-        let (timestamp_delta, read) =
-            i64::decode_var(src).expect("Failed to decode timestamp delta");
-        src.advance(read);
-
-        let (offset_delta, read) = i64::decode_var(src).expect("Failed to decode offset delta");
-        src.advance(read);
-
-        let (key_len, read) = i64::decode_var(src).expect("Failed to decode length");
-        src.advance(read);
-
+        let key_len = decode_var_i64(src);
         let key = if key_len > 0 {
             src.split_to(key_len as usize).to_vec()
         } else {
-            vec![]
+            Vec::new()
         };
 
-        let (value_length, read) = i64::decode_var(src).expect("Failed to decode value length");
-        src.advance(read);
-
+        let value_length = decode_var_i64(src);
         let value = RecordValue::from_bytes(src);
-
         let headers = CompactArray::<Record>::deserialize(src);
 
-        Record {
+        Self {
             length,
             attributes,
             timestamp_delta,
@@ -184,8 +169,14 @@ impl Record {
     }
 }
 
+fn decode_var_i64(src: &mut Bytes) -> i64 {
+    let (val, read) = i64::decode_var(src).expect("Failed to decode var i64");
+    src.advance(read);
+    val
+}
+
 impl Deserialize<Header> for Record {
-    fn deserialize(_src: &mut Bytes) -> Header {
+    fn deserialize(_: &mut Bytes) -> Header {
         Header
     }
 }
@@ -248,37 +239,30 @@ enum RecordType {
 
 impl RecordValue {
     pub fn from_bytes(src: &mut Bytes) -> Self {
-        let frame_version = src.get_u8();
-        assert_eq!(frame_version, 1);
+        assert_eq!(src.get_u8(), 1); // frame_version
         let record_type = RecordType::try_from(src.get_u8()).unwrap();
         let version = src.get_u8();
 
-        let record_value = match record_type {
+        let value = match record_type {
             RecordType::Topic => {
                 assert_eq!(version, 0);
-                let topic_name = CompactNullableString::deserialize(src);
-                let topic_id = Uuid::deserialize(src);
-
                 RecordValue::Topic(TopicValue {
-                    topic_name,
-                    topic_id,
+                    topic_name: CompactNullableString::deserialize(src),
+                    topic_id: Uuid::deserialize(src),
                 })
             }
             RecordType::Partition => {
                 assert_eq!(version, 1);
                 let partition_id = src.get_u32();
                 let topic_id = Uuid::deserialize(src);
-
                 let replicas = CompactArray::<PartitionValue>::deserialize(src);
                 let in_sync_replicas = CompactArray::<PartitionValue>::deserialize(src);
                 let removing_replicas = CompactArray::<PartitionValue>::deserialize(src);
                 let adding_replicas = CompactArray::<PartitionValue>::deserialize(src);
-
                 let leader_id = src.get_u32();
                 let leader_epoch = src.get_u32();
                 let partition_epoch = src.get_u32();
                 let directories = CompactArray::<PartitionValue>::deserialize(src);
-
                 RecordValue::Partition(PartitionValue {
                     partition_id,
                     topic_id,
@@ -294,17 +278,15 @@ impl RecordValue {
             }
             RecordType::FeatureLevel => {
                 assert_eq!(version, 0);
-                let name = CompactNullableString::deserialize(src);
-                let level = src.get_u16();
-                RecordValue::FeatureLevel(FeatureLevelValue { name, level })
+                RecordValue::FeatureLevel(FeatureLevelValue {
+                    name: CompactNullableString::deserialize(src),
+                    level: src.get_u16(),
+                })
             }
         };
 
-        let (tagged_fields_count, read) =
-            i64::decode_var(src).expect("Failed to decode tagged fields count");
-        src.advance(read);
+        let tagged_fields_count = decode_var_i64(src);
         assert_eq!(tagged_fields_count, 0);
-
-        record_value
+        value
     }
 }

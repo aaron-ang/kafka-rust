@@ -1,7 +1,6 @@
 use std::fmt::Display;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-
 use integer_encoding::*;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 
@@ -89,7 +88,6 @@ impl Deserialize<Self> for HeaderV2 {
         let correlation_id = src.get_i32();
         let client_id = NullableString::deserialize(src);
         TagBuffer::deserialize(src);
-
         Self {
             api_key,
             api_version,
@@ -110,8 +108,9 @@ impl Display for Uuid {
 
 impl Serialize for Uuid {
     fn serialize(&self) -> Bytes {
+        let hex_str = self.0.replace('-', "");
         let mut b = BytesMut::with_capacity(32);
-        b.extend_from_slice(&hex::decode(self.0.replace('-', "")).expect("valid UUID string"));
+        b.extend_from_slice(&hex::decode(hex_str).expect("valid UUID string"));
         b.freeze()
     }
 }
@@ -133,11 +132,7 @@ impl Deserialize<Self> for NullableString {
     fn deserialize(src: &mut Bytes) -> Self {
         let len = src.get_i16();
         let string_len = if len == -1 { 0 } else { len as usize };
-        if string_len == 0 {
-            return Self(None);
-        }
-        if src.remaining() < string_len {
-            eprintln!("Not enough bytes to read string");
+        if string_len == 0 || src.remaining() < string_len {
             return Self(None);
         }
         let bytes = src.split_to(string_len);
@@ -173,15 +168,10 @@ impl Deserialize<Self> for CompactNullableString {
     fn deserialize(src: &mut Bytes) -> Self {
         let (len, read) = u32::decode_var(src).expect("Failed to decode length");
         src.advance(read);
-        if len == 0 {
+        if len == 0 || src.remaining() < (len as usize - 1) {
             return Self(None);
         }
-        let string_len = len as usize - 1;
-        if src.remaining() < string_len {
-            eprintln!("Not enough bytes to read string");
-            return Self(None);
-        }
-        let bytes = src.split_to(string_len);
+        let bytes = src.split_to(len as usize - 1);
         Self(Some(String::from_utf8(bytes.to_vec()).unwrap()))
     }
 }
@@ -204,17 +194,15 @@ impl<T: Serialize> Serialize for CompactArray<T> {
 
 impl<T, U> Deserialize<Vec<U>> for CompactArray<T>
 where
-    T: Deserialize<U>, // T must know how to deserialize into U
+    T: Deserialize<U>,
 {
     fn deserialize(src: &mut Bytes) -> Vec<U> {
         let (len, read) = u64::decode_var(src).expect("Failed to decode length");
         src.advance(read);
-        let items_len = if len > 1 { len as usize - 1 } else { 0 };
-
-        let mut items = Vec::with_capacity(items_len);
-        for _ in 0..items_len {
-            let item = T::deserialize(src);
-            items.push(item);
+        let items_count = if len > 1 { len as usize - 1 } else { 0 };
+        let mut items = Vec::with_capacity(items_count);
+        for _ in 0..items_count {
+            items.push(T::deserialize(src));
         }
         items
     }
@@ -228,11 +216,10 @@ where
 {
     fn deserialize(src: &mut Bytes) -> Vec<U> {
         let len = src.get_i32();
-        let items_len = if len == -1 { 0 } else { len as usize };
-        let mut items = Vec::with_capacity(items_len);
-        for _ in 0..items_len {
-            let item = T::deserialize(src);
-            items.push(item);
+        let items_count = if len == -1 { 0 } else { len as usize };
+        let mut items = Vec::with_capacity(items_count);
+        for _ in 0..items_count {
+            items.push(T::deserialize(src));
         }
         items
     }

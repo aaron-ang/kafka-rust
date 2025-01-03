@@ -37,14 +37,12 @@ pub struct DescribeTopicPartitionsResponseV0 {
 
 impl DescribeTopicPartitionsResponseV0 {
     pub fn new(correlation_id: i32, topics: Vec<Topic>) -> Self {
-        let header = HeaderV1::new(correlation_id);
-        let resp = Self {
-            header,
+        Self {
+            header: HeaderV1::new(correlation_id),
             throttle_time_ms: 0,
             topics: CompactArray(topics),
             next_cursor: 0xFF,
-        };
-        resp
+        }
     }
 }
 
@@ -64,31 +62,25 @@ pub fn handle_request(
     message: &mut Bytes,
 ) -> Result<DescribeTopicPartitionsResponseV0> {
     let record_batches = RecordBatches::from_file(CLUSTER_METADATA_LOG_FILE)?;
-    let mut topic_id = Uuid(DEFAULT_UNKNOWN_TOPIC_UUID.to_string());
-    let mut topic_error_code = ErrorCode::UnknownTopicOrPartition;
     let topic_authorized_operations = 0x0DF;
     let req = DescribeTopicPartitionsRequestV0::deserialize(message);
-    let mut topics = vec![];
+    let mut topics = Vec::new();
 
     for record_batch in record_batches.batches() {
         for topic_name in &req.topic_names {
-            topic_id = Uuid(DEFAULT_UNKNOWN_TOPIC_UUID.to_string());
-            let mut partitions = vec![];
+            let mut partitions = Vec::new();
+            let mut topic_id = Uuid(DEFAULT_UNKNOWN_TOPIC_UUID.to_string());
+            let mut topic_error_code = ErrorCode::UnknownTopicOrPartition;
 
             for rec in &record_batch.records {
-                let record_type = &rec.value;
-                if let Some(id) = match record_type {
-                    RecordValue::Topic(ref topic) if topic.topic_name == *topic_name => {
-                        Some(topic.topic_id.clone())
+                if let RecordValue::Topic(ref topic) = rec.value {
+                    if topic.topic_name == *topic_name {
+                        topic_id = topic.topic_id.clone();
+                        topic_error_code = ErrorCode::None;
                     }
-                    _ => None,
-                } {
-                    topic_id = id;
-                    topic_error_code = ErrorCode::None;
-                };
-
-                match record_type {
-                    RecordValue::Partition(p) if p.topic_id == topic_id => {
+                }
+                if let RecordValue::Partition(p) = &rec.value {
+                    if p.topic_id == topic_id {
                         partitions.push(Partition::new(
                             ErrorCode::None,
                             p.partition_id,
@@ -101,41 +93,32 @@ pub fn handle_request(
                             p.removing_replicas.clone(),
                         ));
                     }
-                    _ => {}
                 }
             }
 
             if !partitions.is_empty() {
-                let topic = Topic {
+                topics.push(Topic {
                     error_code: topic_error_code,
                     name: topic_name.clone(),
                     topic_id: topic_id.clone(),
                     is_internal: false,
                     partitions: CompactArray(partitions),
                     topic_authorized_operations,
-                };
-                topics.push(topic);
+                });
             }
         }
     }
 
     for requested_topic in req.topic_names {
-        let mut topic_found = false;
-        for topic in &topics {
-            if topic.name == requested_topic {
-                topic_found = true;
-            }
-        }
-        if !topic_found {
-            let error_topic = Topic {
+        if !topics.iter().any(|t| t.name == requested_topic) {
+            topics.push(Topic {
                 error_code: ErrorCode::UnknownTopicOrPartition,
                 name: requested_topic,
-                topic_id: topic_id.clone(),
+                topic_id: Uuid(DEFAULT_UNKNOWN_TOPIC_UUID.to_string()),
                 is_internal: false,
                 partitions: CompactArray(Vec::new()),
                 topic_authorized_operations,
-            };
-            topics.push(error_topic);
+            });
         }
     }
 
@@ -200,7 +183,7 @@ impl Partition {
         in_sync_replicas: Vec<u32>,
         eligible_leader_replicas: Vec<u32>,
         last_known_eligible_leader_replicas: Vec<u32>,
-        off_line_replicas: Vec<u32>,
+        offline_replicas: Vec<u32>,
     ) -> Self {
         Self {
             error_code,
@@ -211,7 +194,7 @@ impl Partition {
             in_sync_replicas: CompactArray(in_sync_replicas),
             eligible_leader_replicas: CompactArray(eligible_leader_replicas),
             last_known_eligible_leader_replicas: CompactArray(last_known_eligible_leader_replicas),
-            offline_replicas: CompactArray(off_line_replicas),
+            offline_replicas: CompactArray(offline_replicas),
         }
     }
 }
