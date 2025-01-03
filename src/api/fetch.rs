@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use anyhow::Result;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
@@ -18,19 +16,19 @@ pub struct FetchRequestV16 {
 }
 
 impl Deserialize<Self> for FetchRequestV16 {
-    fn deserialize(src: &mut Bytes) -> Result<Self> {
+    fn deserialize(src: &mut Bytes) -> Self {
         let max_wait_ms = src.get_u32();
         let min_bytes = src.get_u32();
         let max_bytes = src.get_u32();
         let isolation_level = src.get_u8();
         let session_id = src.get_u32();
         let session_epoch = src.get_u32();
-        let topics = CompactArray::<Self>::deserialize(src)?;
-        let forgotten_topics_data = CompactArray::<Self>::deserialize(src)?;
-        let rack_id = CompactNullableString::deserialize(src)?;
-        _ = TagBuffer::deserialize(src);
+        let topics = CompactArray::<Self>::deserialize(src);
+        let forgotten_topics_data = CompactArray::<Self>::deserialize(src);
+        let rack_id = CompactNullableString::deserialize(src);
+        TagBuffer::deserialize(src);
 
-        Ok(Self {
+        Self {
             max_wait_ms,
             min_bytes,
             max_bytes,
@@ -40,30 +38,30 @@ impl Deserialize<Self> for FetchRequestV16 {
             topics,
             forgotten_topics_data,
             rack_id,
-        })
+        }
     }
 }
 
 impl Deserialize<TopicRequest> for FetchRequestV16 {
-    fn deserialize(src: &mut Bytes) -> Result<TopicRequest> {
-        let topic_id = Uuid::deserialize(src)?;
-        let partitions = CompactArray::<TopicRequest>::deserialize(src)?;
-        _ = TagBuffer::deserialize(src);
-        Ok(TopicRequest {
+    fn deserialize(src: &mut Bytes) -> TopicRequest {
+        let topic_id = Uuid::deserialize(src);
+        let partitions = CompactArray::<TopicRequest>::deserialize(src);
+        TagBuffer::deserialize(src);
+        TopicRequest {
             topic_id,
             partitions,
-        })
+        }
     }
 }
 
 impl Deserialize<ForgottenTopicData> for FetchRequestV16 {
-    fn deserialize(src: &mut Bytes) -> Result<ForgottenTopicData> {
+    fn deserialize(src: &mut Bytes) -> ForgottenTopicData {
         let ftd = ForgottenTopicData {
-            topic_id: Uuid::deserialize(src)?,
-            partitions: CompactArray::<ForgottenTopicData>::deserialize(src)?,
+            topic_id: Uuid::deserialize(src),
+            partitions: CompactArray::<ForgottenTopicData>::deserialize(src),
         };
-        _ = TagBuffer::deserialize(src);
-        Ok(ftd)
+        TagBuffer::deserialize(src);
+        ftd
     }
 }
 
@@ -104,7 +102,7 @@ impl Response for FetchResponseV16 {
 }
 
 pub fn handle_request(header: HeaderV2, message: &mut Bytes) -> Result<FetchResponseV16> {
-    let req: FetchRequestV16 = FetchRequestV16::deserialize(message)?;
+    let req: FetchRequestV16 = FetchRequestV16::deserialize(message);
     let mut responses = vec![];
 
     for topic_req in req.topics {
@@ -117,7 +115,7 @@ pub fn handle_request(header: HeaderV2, message: &mut Bytes) -> Result<FetchResp
                 last_stable_offset: 0,
                 log_start_offset: 0,
                 aborted_transactions: CompactArray(vec![]),
-                preferred_read_replica: -1,
+                preferred_read_replica: 0,
                 record_batches: CompactArray(vec![]),
             };
             partitions.push(tp);
@@ -138,8 +136,8 @@ pub struct TopicRequest {
 }
 
 impl Deserialize<Partition> for TopicRequest {
-    fn deserialize(src: &mut Bytes) -> Result<Partition> {
-        let p = Partition {
+    fn deserialize(src: &mut Bytes) -> Partition {
+        let partition = Partition {
             partition_index: src.get_u32(),
             current_leader_epoch: src.get_u32(),
             fetch_offset: src.get_u64(),
@@ -147,8 +145,8 @@ impl Deserialize<Partition> for TopicRequest {
             log_start_offset: src.get_u64(),
             partition_max_bytes: src.get_u32(),
         };
-        _ = TagBuffer::deserialize(src);
-        Ok(p)
+        TagBuffer::deserialize(src);
+        partition
     }
 }
 
@@ -182,8 +180,8 @@ struct ForgottenTopicData {
 }
 
 impl Deserialize<u32> for ForgottenTopicData {
-    fn deserialize(src: &mut Bytes) -> Result<u32> {
-        Ok(src.get_u32())
+    fn deserialize(src: &mut Bytes) -> u32 {
+        src.get_u32()
     }
 }
 

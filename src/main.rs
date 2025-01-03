@@ -1,17 +1,11 @@
-mod api_versions;
-mod describe_topic_partitions;
-mod fetch;
-mod protocol;
-
-use api_versions::ApiVersionsResponseV3;
-use protocol::*;
-
 use anyhow::{anyhow, Result};
 use bytes::{BufMut, Bytes, BytesMut};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
+
+use kafka_starter_rust::*;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -24,7 +18,7 @@ async fn main() -> Result<()> {
         tokio::spawn(async move {
             println!("accepted new connection");
             if let Err(e) = handle_conn(stream).await {
-                eprintln!("error handling request: {:?}", e);
+                eprintln!("error: {}", e);
             }
         });
     }
@@ -52,7 +46,7 @@ async fn get_message(stream: &mut TcpStream) -> Result<Bytes> {
 }
 
 fn process_message(message: &mut Bytes) -> Result<Box<dyn Response + Send>> {
-    let header = HeaderV2::deserialize(message)?;
+    let header = HeaderV2::deserialize(message);
     let request_api_key = match ApiKey::try_from(header.api_key) {
         Ok(key) => key,
         Err(_) => {
@@ -66,8 +60,8 @@ fn process_message(message: &mut Bytes) -> Result<Box<dyn Response + Send>> {
             Box::new(res)
         }
         ApiKey::ApiVersions => {
-            let resp = ApiVersionsResponseV3::new(header);
-            Box::new(resp)
+            let res = api_versions::ApiVersionsResponseV3::new(header);
+            Box::new(res)
         }
         ApiKey::DescribeTopicPartitions => {
             let res = describe_topic_partitions::handle_request(header, message)?;
