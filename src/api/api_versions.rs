@@ -36,13 +36,12 @@ impl ApiVersionsResponseV3 {
             error_code = ErrorCode::UnsupportedVersion
         }
 
-        let resp = Self {
+        Self {
             header,
             error_code,
             api_keys: CompactArray(API_KEYS.to_vec()),
             throttle_time_ms: 0,
-        };
-        resp
+        }
     }
 }
 

@@ -50,7 +50,6 @@ impl RecordBatches {
     }
 }
 
-#[derive(Debug, Clone)]
 pub struct RecordBatch {
     pub base_offset: i64,
     batch_length: i32,
@@ -126,7 +125,6 @@ impl Serialize for RecordBatch {
     }
 }
 
-#[derive(Debug, Clone)]
 pub struct Record {
     length: i64,
     attributes: i8,
@@ -181,23 +179,19 @@ impl Deserialize<Header> for Record {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
 struct Header;
 
-#[derive(Debug, Clone)]
 pub enum RecordValue {
     FeatureLevel(FeatureLevelValue),
     Topic(TopicValue),
     Partition(PartitionValue),
 }
 
-#[derive(Debug, Clone)]
 pub struct TopicValue {
     pub topic_name: CompactNullableString,
     pub topic_id: Uuid,
 }
 
-#[derive(Debug, Clone)]
 pub struct PartitionValue {
     pub partition_id: u32,
     pub topic_id: Uuid,
@@ -223,7 +217,6 @@ impl Deserialize<Uuid> for PartitionValue {
     }
 }
 
-#[derive(Debug, Clone)]
 pub struct FeatureLevelValue {
     name: CompactNullableString,
     level: u16,
